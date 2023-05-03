@@ -1,0 +1,81 @@
+public with sharing class AccountTriggerHandler {
+    
+    public static void handleInsert(List<Account> newAccounts) {
+        List<Team_Member__c> newTeamMembers = new List<Team_Member__c>();
+        
+        for (Account newAccount : newAccounts) {
+            newAccount.Active__c = false;
+            
+            // Create two team member records with blank Name, Contact Info, and Member Type
+            newTeamMembers.add(new Team_Member__c(Name='Team Member 1', Member_Type__c='', Account__c=newAccount.Id));
+            newTeamMembers.add(new Team_Member__c(Name='Team Member 2', Member_Type__c='', Account__c=newAccount.Id));
+        }
+        
+        insert newAccounts;
+        insert newTeamMembers;
+    }
+    
+    public static void handleBeforeUpdate(List<Account> accountsToUpdate) {
+        Set<Id> accountIds = new Set<Id>();
+        
+        for (Account account : accountsToUpdate) {
+            // Check if the account is being activated
+            if (account.Active__c && !Trigger.oldMap.get(account.Id).Active__c) {
+                accountIds.add(account.Id);
+            }
+        }
+        
+        if (!accountIds.isEmpty()) {
+            List<Team_Member__c> teamMembers = [SELECT Id, Member_Type__c FROM Team_Member__c WHERE Account__c IN :accountIds];
+            
+            // Check if all activated accounts have at least one team member of HR and Admin member type
+            for (Id accountId : accountIds) {
+                boolean hasHRTeamMember = false;
+                boolean hasAdminTeamMember = false;
+                
+                for (Team_Member__c teamMember : teamMembers) {
+                    if (teamMember.Account__c == accountId) {
+                        if (teamMember.Member_Type__c == 'HR') {
+                            hasHRTeamMember = true;
+                        }
+                        if (teamMember.Member_Type__c == 'Admin') {
+                            hasAdminTeamMember = true;
+                        }
+                    }
+                }
+                
+                if (!hasHRTeamMember || !hasAdminTeamMember) {
+                    // Throw an exception to prevent the account from being activated
+                    throw new CustomException('Cannot activate account without team members of HR and Admin member type');
+                }
+            }
+        }
+    }
+    
+    public static void handleAfterUpdate(List<Account> accountsUpdated) {
+        // Check if the accounts were activated by a user with permission set (Account_Admin)
+        for (Account account : accountsUpdated) {
+            if (account.Active__c && !Trigger.oldMap.get(account.Id).Active__c) {
+                Boolean hasAccountAdminPermission = false;
+                
+                for (PermissionSetAssignment permissionSetAssignment : [SELECT PermissionSet.Name FROM PermissionSetAssignment WHERE AssigneeId = :UserInfo.getUserId()]) {
+                    if (permissionSetAssignment.PermissionSet.Name == 'Account_Admin') {
+                        hasAccountAdminPermission = true;
+                        break;
+                    }
+                }
+                
+                if (!hasAccountAdminPermission) {
+                    // Throw an exception to deactivate the account and notify the user
+                    account.Active__c = false;
+                    throw new CustomException('Only users with permission set (Account_Admin) can activate accounts');
+                }
+            }
+        }
+        
+        update accountsUpdated;
+    }
+    
+    public class CustomException extends Exception {}
+}
+
