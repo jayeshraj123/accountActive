@@ -1,0 +1,67 @@
+@isTest
+private class AccountTriggerHandlerTest {
+    @isTest static void testAccountInsert() {
+        Account newAccount = new Account(Name='Test Account');
+        List<Account> newAccounts = new List<Account>{ newAccount };
+        
+        Test.startTest();
+        AccountTriggerHandler.handleInsert(newAccounts);
+        Test.stopTest();
+        
+        newAccount = [SELECT Id, Active__c FROM Account WHERE Id = :newAccount.Id];
+        List<Team_Member__c> newTeamMembers = [SELECT Id, Account__c FROM Team_Member__c WHERE Account__c = :newAccount.Id];
+        
+        System.assertEquals(false, newAccount.Active__c, 'Account should have Active__c set to false');
+        System.assertEquals(2, newTeamMembers.size(), 'Account should have 2 Team Member records');
+    }
+    
+    @isTest static void testAccountUpdate() {
+        // Create an account and two team members
+        Account newAccount = new Account(Name='Test Account');
+        insert newAccount;
+        List<Team_Member__c> newTeamMembers = new List<Team_Member__c>{
+            new Team_Member__c(Name='Team Member 1', Member_Type__c='', Account__c=newAccount.Id),
+            new Team_Member__c(Name='Team Member 2', Member_Type__c='', Account__c=newAccount.Id)
+        };
+        insert newTeamMembers;
+        
+        // Test case where account is activated without HR or Admin team members
+        newAccount.Active__c = true;
+        Test.startTest();
+        try {
+            update newAccount;
+            System.assert(false, 'Exception should have been thrown');
+        } catch (AccountTriggerHandler.CustomException ex) {
+            System.assertEquals('Cannot activate account without team members of HR and Admin member type', ex.getMessage(), 'Exception message should match');
+        }
+        Test.stopTest();
+        
+        // Add HR and Admin team members and activate account
+        newTeamMembers[0].Member_Type__c = 'HR';
+        newTeamMembers[1].Member_Type__c = 'Admin';
+        update newTeamMembers;
+        newAccount.Active__c = true;
+        
+        // Test case where account is activated by user without permission set
+        Test.startTest();
+        try {
+            update newAccount;
+            System.assert(false, 'Exception should have been thrown');
+        } catch (AccountTriggerHandler.CustomException ex) {
+            System.assertEquals('Only users with permission set (Account_Admin) can activate accounts', ex.getMessage(), 'Exception message should match');
+        }
+        Test.stopTest();
+        
+        // Activate account as user with permission set
+        PermissionSet ps = [SELECT Id FROM PermissionSet WHERE Name = 'Account_Admin' LIMIT 1];
+        PermissionSetAssignment psa = new PermissionSetAssignment(AssigneeId=Userinfo.getUserId(), PermissionSetId=ps.Id);
+        insert psa;
+        Test.startTest();
+        update newAccount;
+        Test.stopTest();
+        
+        // Check that account was updated successfully
+        newAccount = [SELECT Id, Active__c FROM Account WHERE Id = :newAccount.Id];
+        System.assertEquals(true, newAccount.Active__c, 'Account should have Active__c set to true');
+    }
+}
